@@ -64,7 +64,7 @@ HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode
 Run the following command from an **elevated** Command Prompt or PowerShell:
 
 ```cmd
-sc create DNSDiode binPath= "C:\Path\To\DNSDiode.exe" DisplayName= "DNS Data Diode Service" start= auto
+sc create DNSDiode binPath= "C:\Path\To\DNSDiode.exe" DisplayName= "DNS Data Diode Service" start= demand
 ```
 
 Replace `C:\Path\To\DNSDiode.exe` with the actual path to your compiled executable.  C:\Program Files\DNSDataDiode is recommended for security.
