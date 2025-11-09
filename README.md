@@ -132,7 +132,8 @@ All configuration values are stored in `HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode
 - **Format:** 32-character hexadecimal string (represents 16 bytes for AES-128)
 - **Example:** `"0123456789ABCDEF0123456789ABCDEF"`
 - **Description:** Encryption key used for AES-128-ECB encryption/decryption. Must be identical on both Client and Server.
-``` Powershell to generate a cryptographically secure 128-bit key
+- Powershell to generate a cryptographically secure 128-bit key:
+```
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 $bytes = New-Object byte[] 16
 $rng.GetBytes($bytes)
