@@ -1,0 +1,60 @@
+Create a .net 8.0 Windows service (x64)
+If HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\Mode is set to "Client":
+When a user drops a file into a configured folder location (HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\MonitorFolder):
+1. Open each file in binary format
+2. Compress using GZip (optimal)
+3. Encrypt using AES128-ECB and a hex string key(HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\EncryptionKey)
+4. Calculate TotalChunks using ceil(encryptedData.Length / 128) and saving as BASE32.  If TotalChunks exceeds 65535, do not process this file.  It is too large.
+5. Begin packet processing:
+   a. Beginning with a Chunk incrementer at 0, build the filename packet:
+   b. Create a BASE32-converted Chunk variable
+   c. Convert the filename value to ASCII then BASE32 encode
+   d. Split the filename into 63 character segments
+   e. Build a DNS query using the following protocol specification:
+      Chunk.TotalChunks.FilenameSegmentn.FilenameSegmentn+1.FilenameSegmentn+2.CRC-16.hostname(HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\DNSHostname)
+      If the total query length exceeds 253 characters, trim n letters off the end of filename ASCII value before the filename extension (n = ceil((actual query length - 253) * 1.6))) and reassemble the DNS query using the new filename value.  Always preserve the file extension.
+      Example:
+         filenameASCII = "thisfilenameistoolong.txt"
+         n = 5
+         filenameTrimmedASCII = "thisfilenameisto.txt"
+   f. Using the IPv4 address string value specified in HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\DNSServer, send the packet as a properly formatted DNS TXT record query
+      Before processing any data chunks, you must first receive an ASCII-formatted DNS TXT record response of:
+        file=filename
+      Verify that filename matches the ASCII representation of the (potentially trimmed) filename we are currently processing.  If not received within 5 * configured ms delay (HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\QueryDelayMs) send another copy of this packet and wait again until successful.  Fail after 5 attempts and write to the Windows Event Log.
+
+6. Increment the Chunk incrementer each round (data packet round 1 = chunk #1) and build each successive data packet:
+   a. Create a BASE32-converted Chunk value
+   b. Encode each 128 byte encrypted chunk in BASE32
+   c. Calculate a CRC-16 by concatenating all BASE32 data: Chunk + TotalChunks + EncryptedChunk
+   d. Split the encrypted chunk data into 63 character segments
+   e. Build a DNS query using the following protocol specification:
+      Chunk.TotalChunks.ChunkSegmentn.ChunkSegmentn+1.ChunkSegmentn+2.CRC-16.hostname(HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\DNSHostname)
+      Before sending, if the total length of any constructed query is 254 or more characters, stop processing and write an error to the Windows Event Log with the constructed query and the total character length.
+   f. Using the IPv4 address string value specified in HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\DNSServer, send each data packet in order as a properly formatted DNS TXT record query, with a minimum n ms delay between each (HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\QueryDelayMs)
+      The receiver will respond to each request with ASCII encoded DNS TXT record responses in the following format:
+      file=filename Chunk
+   g. If a response is not received in n ms, wait at least 5 * configured ms delay (HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\QueryDelayMs) to see if a response comes.  If not, return to f. and re-send this chunk, waiting again for a successful response
+   h. Once a response is received, verify that filename matches the ASCII representation of the (potentially trimmed) filename and the chunk number matches the chunk we're currently processing.  If so, process the next chunk.
+
+7. When complete, delete the processed file and begin processing the next file if available, or wait for another file to be loaded to the configured folder location. ONLY ONE FILE SHOULD BE PROCESSED AT A TIME.  Maintain a file processing queue with max depth of 10000.
+
+If HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\Mode is set to "Server":
+1. Listen on UDP port 53 for incoming DNS TXT record requests and process each request according to the specification above.  This "Server" service should work 100% reliably with the "Client" service, saving successfully processed files to the string defined in (HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\DestinationFolder)
+2. Ignore/drop any request:
+   a. Not arriving from an IP address in the comma-separated list of addresses in HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\AllowList
+   b. Query hostname not matching the configured HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode\DNSHostName string value.
+      Example:
+      DNSHostName="doidein.local"
+      If the query does not end in doidein.local then it should be ignored.
+3. DNS TXT record responses must be 100% compliant with the DNS TXT record specification so the data will be properly passed back to the client service.
+4. If no chunk data has been received for an active file session for 1 minute, cancel processing for this file.
+5. Be sure to log the start and completion of each file being processed as well as any errors to the Windows Event Log.
+
+Notes:
+1. CRC-16 used should be CRC-16-CCITT
+2. BASE32 encoding should be according to RFC 4648
+2. The service should be multi-threaded since we could receive very important data at the same time we're sending data.
+3. Since transmitting large files could result in many chunks to send (up to a total of 65535 chunks), be mindful of port exhaustion and mitigate as appropriate.
+4. Be sure to clean up after all work, ensuring we have no memory leaks or resource issues should this service run for many months on end.
+
+Please ask any clarifying questions before you begin coding.
