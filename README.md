@@ -3,7 +3,7 @@ _Note: This project is experimental only and not intended for production use wit
   
 **DNSDiode is a .NET 8.0 Windows Service that implements a secure, one-way data transfer mechanism using DNS TXT record queries. The service operates in two modes: Client (sender) and Server (receiver), enabling secure file transfer across network boundaries where traditional bidirectional communication is restricted.**   
   
-In my tests, compressed data transfer speeds averaged 27kbps (dial-up speeds) which, for CSV and other text-based file formats, could translate to greater than 250kbps, which is respectable.
+In my tests, compressed data transfer speeds averaged 27kbps (dial-up speeds) which, for CSV and other highly compressible file formats, could translate to greater than 250kbps, which is respectable.
 
 ## Overview
 
