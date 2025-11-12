@@ -143,6 +143,84 @@ public static class DnsPacketBuilder
         return packet.ToArray();
     }
 
+    public static byte[] BuildNxDomainResponse(byte[] requestPacket)
+    {
+        if (requestPacket.Length < 12)
+            throw new ArgumentException("Request packet too short", nameof(requestPacket));
+
+        var packet = new List<byte>();
+
+        // DNS Header
+        // Transaction ID (2 bytes) - copy from request
+        packet.Add(requestPacket[0]);
+        packet.Add(requestPacket[1]);
+
+        // Flags (2 bytes) - Response, Authoritative Answer, RCODE = 3 (NXDOMAIN)
+        // Bit layout: QR(1) + Opcode(4) + AA(1) + TC(1) + RD(1) + RA(1) + Z(3) + RCODE(4)
+        // Response (QR=1), Authoritative (AA=1), RCODE=3 (NXDOMAIN)
+        // Preserve RD flag from request and set RA if RD was set
+        byte requestFlags1 = requestPacket[2];
+        byte requestFlags2 = requestPacket[3];
+        bool rdSet = (requestFlags1 & 0x01) != 0; // RD is bit 0 of flags byte 1
+        
+        packet.Add(0x81); // QR=1, Opcode=0000, AA=1, TC=0, RD=0 (we're authoritative, so RD doesn't matter)
+        byte responseFlags2 = 0x83; // Z=000, RCODE=0011 (NXDOMAIN = 3)
+        if (rdSet)
+        {
+            responseFlags2 |= 0x80; // Set RA bit if RD was set
+        }
+        packet.Add(responseFlags2);
+
+        // Questions (2 bytes) - copy from request
+        packet.Add(requestPacket[4]);
+        packet.Add(requestPacket[5]);
+
+        // Answer RRs (2 bytes) - 0 (no answers for NXDOMAIN)
+        packet.AddRange(new byte[] { 0x00, 0x00 });
+
+        // Authority RRs (2 bytes) - 0
+        packet.AddRange(new byte[] { 0x00, 0x00 });
+
+        // Additional RRs (2 bytes) - 0
+        packet.AddRange(new byte[] { 0x00, 0x00 });
+
+        // Question Section - copy from request
+        int offset = 12;
+        while (offset < requestPacket.Length && requestPacket[offset] != 0)
+        {
+            byte labelLength = requestPacket[offset];
+            packet.Add(labelLength);
+            offset++;
+            
+            if (offset + labelLength > requestPacket.Length)
+                break;
+                
+            for (int i = 0; i < labelLength; i++)
+            {
+                packet.Add(requestPacket[offset + i]);
+            }
+            offset += labelLength;
+        }
+        
+        // Add null terminator if present in request
+        if (offset < requestPacket.Length && requestPacket[offset] == 0)
+        {
+            packet.Add(0);
+            offset++;
+        }
+
+        // QTYPE and QCLASS - copy from request
+        if (offset + 4 <= requestPacket.Length)
+        {
+            packet.Add(requestPacket[offset]);
+            packet.Add(requestPacket[offset + 1]);
+            packet.Add(requestPacket[offset + 2]);
+            packet.Add(requestPacket[offset + 3]);
+        }
+
+        return packet.ToArray();
+    }
+
     public static (string QueryName, string? TxtData) ParseDnsPacket(byte[] packet)
     {
         if (packet.Length < 12)
@@ -282,11 +360,12 @@ public static class DnsPacketBuilder
         return string.Join(".", labels);
     }
 
-    public static string BuildQueryName(string chunk, string totalChunks, List<string> segments, string crc16, string hostname)
+    public static string BuildQueryName(string chunk, string totalChunks, List<string> segments, string crc16, char labelCount, string hostname)
     {
         var parts = new List<string> { chunk, totalChunks };
         parts.AddRange(segments);
         parts.Add(crc16);
+        parts.Add(labelCount.ToString());
         parts.Add(hostname);
         return string.Join(".", parts);
     }
@@ -327,7 +406,7 @@ public static class DnsPacketBuilder
 
     public static int CalculateQueryLength(string chunk, string totalChunks, List<string> segments, string crc16, string hostname)
     {
-        // Calculate: chunk.totalChunks.segment1.segment2...crc16.hostname
+        // Calculate: chunk.totalChunks.segment1.segment2...crc16.labelCount.hostname
         int length = chunk.Length + 1; // chunk + dot
         length += totalChunks.Length + 1; // totalChunks + dot
         foreach (var segment in segments)
@@ -335,6 +414,7 @@ public static class DnsPacketBuilder
             length += segment.Length + 1; // segment + dot
         }
         length += crc16.Length + 1; // crc16 + dot
+        length += 1 + 1; // labelCount (single char) + dot
         length += hostname.Length; // hostname (no trailing dot)
         return length;
     }

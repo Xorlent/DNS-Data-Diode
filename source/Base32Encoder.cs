@@ -98,5 +98,28 @@ public static class Base32Encoder
         }
         return BitConverter.ToUInt16(bytes, 0);
     }
+
+    /// <summary>
+    /// Encodes a label count (1-8) as a single BASE32 letter (a-h)
+    /// </summary>
+    public static char EncodeLabelCount(int count)
+    {
+        if (count < 1 || count > 8)
+            throw new ArgumentOutOfRangeException(nameof(count), "Label count must be between 1 and 8");
+        
+        return (char)('a' + (count - 1));
+    }
+
+    /// <summary>
+    /// Decodes a label count from a single BASE32 letter (a-h = 1-8)
+    /// </summary>
+    public static int DecodeLabelCount(char labelCountChar)
+    {
+        char lower = char.ToLowerInvariant(labelCountChar);
+        if (lower < 'a' || lower > 'h')
+            throw new ArgumentException($"Invalid label count character: {labelCountChar} (must be a-h)", nameof(labelCountChar));
+        
+        return (lower - 'a') + 1;
+    }
 }
 

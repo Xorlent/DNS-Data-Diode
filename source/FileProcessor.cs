@@ -228,8 +228,17 @@ public class FileProcessor
             ushort crc16 = Crc16Ccitt.Calculate(Encoding.ASCII.GetBytes(crcData));
             string crc16Base32 = Base32Encoder.Encode(crc16);
 
+        // Calculate label count: chunk + totalChunks + segments + crc16 + labelCount itself
+        int labelCount = 2 + filenameSegments.Count + 1 + 1; // chunk, totalChunks, segments, crc16, labelCount
+        if (labelCount > 8)
+        {
+            _eventLog.WriteError($"Label count {labelCount} exceeds maximum of 8 for filename packet: {originalFilename}");
+            return null;
+        }
+        char labelCountChar = Base32Encoder.EncodeLabelCount(labelCount);
+
         // Build query and check length
-        var queryName = DnsPacketBuilder.BuildQueryName(chunkBase32, totalChunksBase32, filenameSegments, crc16Base32, dnsHostname);
+        var queryName = DnsPacketBuilder.BuildQueryName(chunkBase32, totalChunksBase32, filenameSegments, crc16Base32, labelCountChar, dnsHostname);
         int queryLength = queryName.Length;
 
         // Trim filename if needed
@@ -244,8 +253,15 @@ public class FileProcessor
             filenameSegments = DnsPacketBuilder.SplitIntoLabels(trimmedBase32, 63);
             crcData = chunkBase32 + totalChunksBase32 + trimmedBase32;
             crc16 = Crc16Ccitt.Calculate(Encoding.ASCII.GetBytes(crcData));
-            crc16Base32 = Base32Encoder.Encode(BitConverter.GetBytes(crc16));
-            queryName = DnsPacketBuilder.BuildQueryName(chunkBase32, totalChunksBase32, filenameSegments, crc16Base32, dnsHostname);
+            crc16Base32 = Base32Encoder.Encode(crc16);
+            labelCount = 2 + filenameSegments.Count + 1 + 1; // Recalculate label count
+            if (labelCount > 8)
+            {
+                _eventLog.WriteError($"Label count {labelCount} exceeds maximum of 8 for trimmed filename packet: {processedFilename}");
+                return null;
+            }
+            labelCountChar = Base32Encoder.EncodeLabelCount(labelCount);
+            queryName = DnsPacketBuilder.BuildQueryName(chunkBase32, totalChunksBase32, filenameSegments, crc16Base32, labelCountChar, dnsHostname);
         }
 
         // Send filename packet with retries
@@ -356,8 +372,17 @@ public class FileProcessor
             // Split chunk data into 63-char segments
             var chunkSegments = DnsPacketBuilder.SplitIntoLabels(chunkDataBase32, 63);
 
+            // Calculate label count: chunk + totalChunks + segments + crc16 + labelCount itself
+            int labelCount = 2 + chunkSegments.Count + 1 + 1; // chunk, totalChunks, segments, crc16, labelCount
+            if (labelCount > 8)
+            {
+                _eventLog.WriteError($"Label count {labelCount} exceeds maximum of 8 for chunk {chunkIndex} of {filename}");
+                return false;
+            }
+            char labelCountChar = Base32Encoder.EncodeLabelCount(labelCount);
+
             // Build query
-            var queryName = DnsPacketBuilder.BuildQueryName(chunkBase32, totalChunksBase32, chunkSegments, crc16Base32, dnsHostname);
+            var queryName = DnsPacketBuilder.BuildQueryName(chunkBase32, totalChunksBase32, chunkSegments, crc16Base32, labelCountChar, dnsHostname);
             
             // Check query length
             if (queryName.Length >= 254)

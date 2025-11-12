@@ -151,7 +151,7 @@ public class DnsServer
 
             // _eventLog.WriteInfo($"Query hostname matches configured hostname: {dnsHostname}");
 
-            // Parse query components
+            // Parse query components for label count check (FIRST CHECK after hostname validation)
             var parts = queryName.Split('.', StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 3)
             {
@@ -159,31 +159,7 @@ public class DnsServer
                 return;
             }
 
-            // _eventLog.WriteInfo($"Query split into {parts.Length} parts: [{string.Join(", ", parts)}]");
-
-            string chunkBase32 = parts[0];
-            string totalChunksBase32 = parts[1];
-
-            // Decode chunk number
-            ushort chunk = Base32Encoder.DecodeUInt16(chunkBase32);
-
-            // Decode total chunks with validation
-            ushort totalChunks = Base32Encoder.DecodeUInt16(totalChunksBase32);
-            
-            // Validate totalChunks to prevent memory exhaustion (max 65535, but use reasonable limit)
-            const ushort MaxTotalChunks = 65535;
-            const ushort MinTotalChunks = 1;
-            if (totalChunks < MinTotalChunks || totalChunks > MaxTotalChunks)
-            {
-                _eventLog.WriteWarning($"Request rejected - Invalid totalChunks value: {totalChunks} (must be 1-65535) from {remoteEndPoint.Address}");
-                return;
-            }
-
-            // _eventLog.WriteInfo($"Processing packet - Chunk: {chunk}, TotalChunks: {totalChunks} from {remoteEndPoint.Address}");
-
-            // Find CRC-16 (second to last part before hostname)
-            // The hostname should be the last part, so CRC-16 is second to last
-            // But we need to find where the hostname starts (it might be multi-part like "diodeserver.local")
+            // Find hostname start index for label count validation
             int hostnameStartIndex = -1;
             for (int i = parts.Length - 1; i >= 0; i--)
             {
@@ -213,13 +189,89 @@ public class DnsServer
                 }
             }
 
-            if (hostnameStartIndex < 1)
+            if (hostnameStartIndex < 2)
             {
-                _eventLog.WriteWarning($"Request rejected - Could not find hostname '{dnsHostname}' in query parts. Parts: [{string.Join(", ", parts)}] from {remoteEndPoint.Address}");
+                _eventLog.WriteWarning($"Request rejected - Could not find hostname '{dnsHostname}' in query parts or insufficient parts. Parts: [{string.Join(", ", parts)}] from {remoteEndPoint.Address}");
                 return;
             }
 
-            int crcIndex = hostnameStartIndex - 1;
+            // LABEL COUNT CHECK - First validation after hostname/IP checks
+            // Parse label count (second to last before hostname)
+            int labelCountIndex = hostnameStartIndex - 1;
+            if (labelCountIndex < 0 || labelCountIndex >= parts.Length)
+            {
+                _eventLog.WriteWarning($"Request rejected - Label count index is invalid ({labelCountIndex}) from {remoteEndPoint.Address}");
+                return;
+            }
+
+            string labelCountStr = parts[labelCountIndex];
+            if (string.IsNullOrEmpty(labelCountStr) || labelCountStr.Length != 1)
+            {
+                _eventLog.WriteWarning($"Request rejected - Invalid label count format: '{labelCountStr}' from {remoteEndPoint.Address}");
+                return;
+            }
+
+            int expectedLabelCount;
+            try
+            {
+                expectedLabelCount = Base32Encoder.DecodeLabelCount(labelCountStr[0]);
+            }
+            catch (ArgumentException ex)
+            {
+                _eventLog.WriteWarning($"Request rejected - Invalid label count character: '{labelCountStr}' from {remoteEndPoint.Address}. {ex.Message}");
+                return;
+            }
+
+            // Validate label count matches actual count (excluding hostname)
+            int actualLabelCount = hostnameStartIndex;
+            if (actualLabelCount != expectedLabelCount)
+            {
+                // If actual count is less than expected, send NXDOMAIN response (no logging)
+                if (actualLabelCount < expectedLabelCount)
+                {
+                    try
+                    {
+                        byte[] nxDomainResponse = DnsPacketBuilder.BuildNxDomainResponse(requestPacket);
+                        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                        await socket.SendToAsync(new ArraySegment<byte>(nxDomainResponse), SocketFlags.None, remoteEndPoint);
+                    }
+                    catch (Exception ex)
+                    {
+                        _eventLog.WriteError($"Error sending NXDOMAIN response: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    _eventLog.WriteWarning($"Request rejected - Label count mismatch: expected {expectedLabelCount}, actual {actualLabelCount} from {remoteEndPoint.Address}");
+                }
+                return;
+            }
+
+            // Continue with other validations after label count check
+            // _eventLog.WriteInfo($"Query split into {parts.Length} parts: [{string.Join(", ", parts)}]");
+
+            string chunkBase32 = parts[0];
+            string totalChunksBase32 = parts[1];
+
+            // Decode chunk number
+            ushort chunk = Base32Encoder.DecodeUInt16(chunkBase32);
+
+            // Decode total chunks with validation
+            ushort totalChunks = Base32Encoder.DecodeUInt16(totalChunksBase32);
+            
+            // Validate totalChunks to prevent memory exhaustion (max 65535, but use reasonable limit)
+            const ushort MaxTotalChunks = 65535;
+            const ushort MinTotalChunks = 1;
+            if (totalChunks < MinTotalChunks || totalChunks > MaxTotalChunks)
+            {
+                _eventLog.WriteWarning($"Request rejected - Invalid totalChunks value: {totalChunks} (must be 1-65535) from {remoteEndPoint.Address}");
+                return;
+            }
+
+            // _eventLog.WriteInfo($"Processing packet - Chunk: {chunk}, TotalChunks: {totalChunks} from {remoteEndPoint.Address}");
+
+            // Find CRC-16 (third to last before hostname, now that label count is inserted)
+            int crcIndex = hostnameStartIndex - 2;
             if (crcIndex < 0)
             {
                 _eventLog.WriteWarning($"Request rejected - CRC-16 index is invalid ({crcIndex}) from {remoteEndPoint.Address}");
@@ -227,7 +279,7 @@ public class DnsServer
             }
 
             string crc16Base32 = parts[crcIndex];
-            // _eventLog.WriteInfo($"Found CRC-16 at index {crcIndex}: {crc16Base32}, hostname starts at index {hostnameStartIndex}");
+            // _eventLog.WriteInfo($"Found CRC-16 at index {crcIndex}: {crc16Base32}, label count at index {labelCountIndex}: {labelCountStr}, hostname starts at index {hostnameStartIndex}");
 
             if (chunk == 0)
             {
@@ -291,15 +343,17 @@ public class DnsServer
                 hostnameIndex = Array.FindIndex(parts, p => p.Equals(dnsHostname, StringComparison.OrdinalIgnoreCase));
             }
 
-            if (hostnameIndex < 3)
+            if (hostnameIndex < 4)
             {
                 _eventLog.WriteError($"Invalid hostname index {hostnameIndex} for filename packet from {remoteEndPoint.Address}");
                 _processingSemaphore.Release();
                 return;
             }
 
+            // Extract filename segments (between totalChunks and CRC-16, skipping label count)
+            // Structure: chunk.totalChunks.segments...crc16.labelCount.hostname
             var filenameSegments = new List<string>();
-            for (int i = 2; i < hostnameIndex - 1; i++)
+            for (int i = 2; i < hostnameIndex - 2; i++) // -2 to skip CRC-16 and label count
             {
                 filenameSegments.Add(parts[i]);
             }
@@ -396,14 +450,16 @@ public class DnsServer
             hostnameIndex = Array.FindIndex(parts, p => p.Equals(dnsHostname, StringComparison.OrdinalIgnoreCase));
         }
 
-        if (hostnameIndex < 3)
+        if (hostnameIndex < 4)
         {
             _eventLog.WriteError($"Invalid hostname index {hostnameIndex} for data chunk {chunk} from {remoteEndPoint.Address}");
             return;
         }
 
+        // Extract chunk data segments (between totalChunks and CRC-16, skipping label count)
+        // Structure: chunk.totalChunks.segments...crc16.labelCount.hostname
         var chunkSegments = new List<string>();
-        for (int i = 2; i < hostnameIndex - 1; i++)
+        for (int i = 2; i < hostnameIndex - 2; i++) // -2 to skip CRC-16 and label count
         {
             chunkSegments.Add(parts[i]);
         }
