@@ -164,7 +164,7 @@ $key
 - **Type:** REG_SZ (String)
 - **Format:** IPv4 address
 - **Example:** `"192.168.1.100"`
-- **Description:** IP address of the DNS server (Server mode instance) to send queries to.
+- **Description:** IP address of the DNS server (Server mode instance) to send queries to.  **Note: This will be your local DNS server, configured with a conditional DNS forwarder for your selected DNSHostname pointed to the host running the DNS Data Diode in Server mode.**
 
 #### DestinationFolder (Required - Server Mode Only)
 - **Type:** REG_SZ (String)
