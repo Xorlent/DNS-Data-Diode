@@ -67,7 +67,7 @@ Run the following command from an **elevated** Command Prompt or PowerShell:
 sc create DNSDiode binPath= "C:\Path\To\DNSDiode.exe" DisplayName= "DNS Data Diode Service" start= demand
 ```
 
-Replace `C:\Path\To\DNSDiode.exe` with the actual path to your compiled executable.  C:\Program Files\DNSDataDiode is recommended for security.
+Replace `C:\Path\To\DNSDiode.exe` with the actual path to your compiled executable.  C:\Program Files\DNSDataDiode is recommended.
 
 **Optional: Add service description:**
 ```cmd
@@ -218,7 +218,8 @@ reg add "HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode" /v Retries /t REG_DWORD /d 5 
 
 4. **Filename Packet Transmission**:
    - Convert filename to ASCII, then BASE32 encode
-   - Build DNS query: `Chunk.TotalChunks.FilenameSegments.CRC-16.hostname`
+   - Calculate LabelCount: count of labels before hostname (Chunk + TotalChunks + FilenameSegments + CRC-16 + LabelCount itself)
+   - Build DNS query: `Chunk.TotalChunks.FilenameSegments.CRC-16.LabelCount.hostname`
    - If query length > 253 characters, trim filename (preserving extension)
    - Send DNS TXT query to configured DNS server
    - Wait for acknowledgment: `file=filename`
@@ -227,7 +228,8 @@ reg add "HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode" /v Retries /t REG_DWORD /d 5 
 5. **Data Chunk Transmission**:
    - For each 128-byte encrypted chunk:
      - BASE32 encode chunk number and chunk data
-     - Calculate CRC-16-CCITT over: `Chunk + TotalChunks + EncryptedChunk`
+     - Calculate CRC-16-CCITT over: `Chunk + TotalChunks + EncryptedChunk` (LabelCount is not included in CRC calculation)
+     - Calculate LabelCount: count of labels before hostname (Chunk + TotalChunks + ChunkSegments + CRC-16 + LabelCount itself)
      - Build DNS query: `Chunk.TotalChunks.ChunkSegments.CRC-16.hostname`
      - Validate query length < 254 characters
      - Send DNS TXT query with configured delay between chunks
@@ -244,6 +246,11 @@ reg add "HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode" /v Retries /t REG_DWORD /d 5 
 2. **Request Validation**:
    - Check source IP against `AllowList` (ignore if not allowed)
    - Verify query hostname matches configured `DNSHostname`
+   - **Validate LabelCount**:
+     - Parse LabelCount field (single BASE32 letter a-h)
+     - Compare expected LabelCount with actual label count before hostname
+     - If actual count < expected: return NXDOMAIN response (indicates incomplete query)
+     - If actual count > expected: reject with warning
    - Only one file transfer session active at a time (ignore requests from other IPs during active transfer)
 
 3. **Filename Packet Processing**:
@@ -281,20 +288,30 @@ reg add "HKEY_LOCAL_MACHINE\SOFTWARE\DNSDataDiode" /v Retries /t REG_DWORD /d 5 
 
 **Filename Packet (Chunk 0):**
 ```
-Chunk.TotalChunks.FilenameSegment1.FilenameSegment2...CRC-16.hostname
+Chunk.TotalChunks.FilenameSegment1.FilenameSegment2...CRC-16.LabelCount.hostname
 ```
 
 **Data Packet (Chunk 1+):**
 ```
-Chunk.TotalChunks.ChunkSegment1.ChunkSegment2...CRC-16.hostname
+Chunk.TotalChunks.ChunkSegment1.ChunkSegment2...CRC-16.LabelCount.hostname
 ```
 
 Where:
 - `Chunk`: BASE32-encoded ushort (0 for filename, 1+ for data)
 - `TotalChunks`: BASE32-encoded ushort
 - `FilenameSegment*` / `ChunkSegment*`: BASE32-encoded data split into 63-character labels (DNS label limit)
-- `CRC-16`: BASE32-encoded CRC-16-CCITT checksum
-- `hostname`: Configured DNS hostname
+- `CRC-16`: BASE32-encoded CRC-16-CCITT checksum (calculated over: Chunk + TotalChunks + DataSegments)
+- `LabelCount`: Single BASE32 letter (a=1, b=2, c=3, d=4, e=5, f=6, g=7, h=8) representing the count of labels excluding the hostname
+- `hostname`: Configured DNS hostname (e.g. diodein.local)
+
+**LabelCount Calculation:**
+The LabelCount field counts all labels before the hostname, including itself. For example:
+- If there are 7 labels before the hostname (Chunk, TotalChunks, Segment1, Segment2, Segment3, CRC-16, LabelCount), the LabelCount value is `g` (7).
+
+**LabelCount Validation:**
+- The server validates the LabelCount as the first check after hostname and IP allowlist validation
+- If the actual label count is less than the expected LabelCount, the server returns an NXDOMAIN response (indicating an incomplete query)
+- This helps identify complete queries when receiving recursive DNS requests
 
 ### Response Format
 
