@@ -24,7 +24,7 @@ The service processes files by:
 
 - Windows Server or Windows 10/11 (x64)
 - [.NET 8.0 Runtime](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/sdk-8.0.415-windows-x64-installer)
-- Administrator privileges (for service installation and server role UDP port 53 binding)
+- Administrator privileges (for service installation and UDP port 53 binding (server mode))
 - Registry access for configuration
 
 ## Installation
