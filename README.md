@@ -1,5 +1,5 @@
 # DNSDiode - DNS-Based Data Diode Service for Windows
-_Note: This project is experimental only and not intended for production use without significant validation.  Most of the code was generated using the provided prompt as a starting point, then fixing code issues by hand and via a LLM-based coding agent._  
+_Note: This project is experimental only and not intended for production use without significant validation and optimization.  Most of the code was generated using the provided prompt as a starting point, then fixing code issues by hand and via a LLM-based coding agent._  
   
 **DNSDiode is a .NET 8.0 Windows Service that implements a secure, one-way data transfer mechanism using DNS TXT record queries. The service operates in two modes: Client (sender) and Server (receiver), enabling secure file transfer across network boundaries where traditional bidirectional communication is restricted.**   
   
